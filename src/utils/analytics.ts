@@ -1,56 +1,70 @@
-// src/utils/analytics.ts
 import { WorkTime } from '@/types/work-time';
-import { getISOWeek, parseISO } from 'date-fns'; // 날짜 라이브러리 활용 추천 (없으면 기본 로직 사용)
 
-// 근무 시간 계산 (기존 유지)
+// 근무 시간 계산 (분 단위 -> 시간 단위)
 export function calcWorkHours(betime: string, edtime: string): number {
   if (!betime || !edtime) return 0;
+  
   try {
     const [sh, sm] = betime.split(':').map(Number);
     const [eh, em] = edtime.split(':').map(Number);
+    
     if (isNaN(sh) || isNaN(sm) || isNaN(eh) || isNaN(em)) return 0;
     
     let mins = (eh * 60 + em) - (sh * 60 + sm);
-    if (mins < 0) mins += 24 * 60;
-    return Number(((mins > 60 ? mins - 60 : mins) / 60).toFixed(1)); // 휴게 1시간 제외
-  } catch (e) { return 0; }
+    if (mins < 0) mins += 24 * 60; // 자정을 넘긴 경우
+    
+    return Number(((mins > 60 ? mins - 60 : mins) / 60).toFixed(1)); // 휴게시간 1시간 제외 가정
+  } catch (e) {
+    return 0;
+  }
 }
 
+// 근태 유형 분류
 export function classifyAttendance(item: WorkTime) {
   const retext = item.RETEXT?.trim() || '';
   const betime = item.BETIME;
   const edtime = item.EDTIME;
 
+  // RETEXT가 없고 출퇴근 시간이 없으면 -> 누락
   if (!retext) {
     if (betime && edtime) return { type: 'normal', label: '정상' };
     return { type: 'missing', label: '미체크' };
   }
+
   if (retext === '결근(무단결근)') return { type: 'absent', label: retext };
+  
   const normalTypes = ['정상', '조퇴', '지각'];
   if (normalTypes.includes(retext)) return { type: 'normal', label: retext };
+
   return { type: 'offDuty', label: retext };
 }
 
+// 메인 분석 함수
 export function analyzeData(data: WorkTime[]) {
   const stats = {
-    totalEmp: new Set<string>(),
-    working: 0, offDuty: 0, missing: 0, absent: 0,
-    totalWorkHours: 0, weekendWork: 0,
+    totalEmp: new Set<string>(), // 전체 고유 인원
+    working: 0, // 실근무
+    offDuty: 0, // 휴무
+    missing: 0, // 누락
+    absent: 0,  // 무단결근
+    totalWorkHours: 0,
+    weekendWork: 0, // 주말 근무 건수
+    longWork: 0,    // 장시간 근무 건수
     
     // 리스트 데이터
     missingList: [] as WorkTime[],
     absentList: [] as WorkTime[],
     weekendList: [] as (WorkTime & { hours: number })[],
     
-    // 그룹별
+    // 그룹별 통계
     daily: {} as Record<string, any>,
     dept: {} as Record<string, any>,
     
-    // [NEW] 주간 근무 시간 집계용 (사번-주차별)
+    // 주간 근무 시간 집계용 (사번-주차별)
     weeklyWork: {} as Record<string, number>,
-    // [NEW] 장시간 근무자 목록 (주 50시간 초과)
+    // 장시간 근무자 목록 (주 50시간 초과)
     longWorkList: [] as { empNum: string, name: string, dept: string, week: string, hours: number }[],
-    // [NEW] 검색된 개인의 상세 기록 (검색 시 사용)
+    // 검색된 개인의 상세 기록 (검색 시 사용)
     individualRecords: [] as (WorkTime & { hours: number, status: string })[]
   };
 
@@ -65,9 +79,9 @@ export function analyzeData(data: WorkTime[]) {
     // 개인 기록 저장 (검색용)
     stats.individualRecords.push({ ...row, hours, status: label });
 
-    // 1. 주간 근무 시간 누적 (ISO 주차 기준)
-    // 간단하게 연도-주차 키 생성 (예: 2026-W03)
-    const weekKey = `${row.EMPNUM}-${getWeekNumber(new Date(date))}`;
+    // 1. 주간 근무 시간 누적
+    const weekNum = getWeekNumber(new Date(date));
+    const weekKey = `${row.EMPNUM}-${weekNum}`;
     if (!stats.weeklyWork[weekKey]) stats.weeklyWork[weekKey] = 0;
     
     if (type === 'normal') {
@@ -88,7 +102,7 @@ export function analyzeData(data: WorkTime[]) {
       stats.weekendList.push({ ...row, hours });
     }
 
-    // 일자별/부서별 집계 (기존 로직 유지)
+    // 2. 일자별 통계 초기화 및 집계
     if (!stats.daily[date]) {
       stats.daily[date] = { date, weekday: row.WEEKTX, total: 0, working: 0, offDuty: 0, missing: 0, absent: 0, isWeekend };
     }
@@ -98,6 +112,7 @@ export function analyzeData(data: WorkTime[]) {
     else if (type === 'missing') stats.daily[date].missing++;
     else if (type === 'absent') stats.daily[date].absent++;
 
+    // 3. 부서별 통계 (평일 기준)
     if (!isWeekend) {
       if (!stats.dept[dept]) {
         stats.dept[dept] = { name: dept, total: 0, normal: 0, missing: 0, absent: 0, workSum: 0, empCount: new Set() };
@@ -112,8 +127,7 @@ export function analyzeData(data: WorkTime[]) {
     }
   });
 
-  // [NEW] 주간 50시간 초과자 필터링
-  // weeklyWork: { "102001-3": 52.5 } 형태
+  // 주간 50시간 초과자 필터링
   const processedWeeks = new Set<string>(); // 중복 제거용
   
   data.forEach(row => {
@@ -135,7 +149,7 @@ export function analyzeData(data: WorkTime[]) {
   return stats;
 }
 
-// 주차 계산 헬퍼 함수
+// 주차 계산 헬퍼 함수 (라이브러리 없이 직접 구현)
 function getWeekNumber(d: Date) {
   d = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
   d.setUTCDate(d.getUTCDate() + 4 - (d.getUTCDay() || 7));
