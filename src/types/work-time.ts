@@ -1,6 +1,14 @@
 export interface WorkTime {
-  EMPNUM: string;   // 사번
-  NAMEKO: string;   // 이름
-  TITEXT: string;   // 직급
-  // 필요한 다른 컬럼이 있다면 여기에 추가하세요
+  ORGAID: string; // 팀코드
+  ORGTXT: string; // 팀명
+  EMPNUM: string; // 사번
+  NAMEKO: string; // 이름
+  TITEXT: string; // 직책
+  LETEXT: string; // 직급
+  TMDATE: string; // 날짜
+  WEEKTX: string; // 요일
+  WKSCTX: string; // 근무유형
+  BETIME: string; // 출근시간
+  EDTIME: string; // 퇴근시간
+  RETEXT: string; // 비고
 }
